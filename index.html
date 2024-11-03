@@ -164,47 +164,58 @@
                 return decimal;
             }
 
+            const typeByteSize = {
+                u8: 1,
+                s8: 1,
+                u16: 2,
+                s16: 2,
+                u32: 4,
+                s32: 4,
+                uint: 4,
+                u64: 8,
+                s64: 8,
+                char: 1,
+                bool: 4,
+            };
+
+            const tooltipClassMapping = {
+                1: "u8-value",
+                2: "u16-value",
+                4: "u32-value",
+                8: "u64-value",
+            };
+
             function parsePayload(payload, typeName) {
                 const values = payload.split(",");
                 let html = "";
+                const byteSize = typeByteSize[typeName];
 
-                if (typeName === "u8" || typeName === "s8") {
-                    values.forEach((value) => {
-                        const hex = value.padStart(2, "0");
-                        html += `<span data-tooltip="${hexToDec(value)}" class="payload-value u8-value">${hex}</span>`;
-                    });
-                } else if (typeName === "u16" || typeName === "s16") {
-                    for (let i = 0; i < values.length; i += 2) {
-                        const value = values.slice(i, i + 2).join(",");
-                        html += `<span data-tooltip="${hexToDec(value)}" class="payload-value u16-value">${value}</span>`;
-                    }
-                } else if (
-                    typeName === "u32" ||
-                    typeName === "s32" ||
-                    typeName === "uint"
-                ) {
-                    for (let i = 0; i < values.length; i += 4) {
-                        const value = values.slice(i, i + 4).join(",");
-                        html += `<span data-tooltip="${hexToDec(value)}" class="payload-value u32-value">${value}</span>`;
-                    }
-                } else if (typeName === "u64" || typeName === "s64") {
-                    for (let i = 0; i < values.length; i += 8) {
-                        const value = values.slice(i, i + 8).join(",");
-                        html += `<span data-tooltip="${hexToDec(value)}" class="payload-value u64-value">${value}</span>`;
-                    }
-                } else if (typeName === "char") {
-                    for (let i = 0; i < values.length; i += 1) {
-                        const value = values.slice(i, i + 1).join(",");
-                        html += `<span>${String.fromCharCode(parseInt(value, 16))}</span>`;
-                    }
+                if (typeName === "char") {
+                    const escapeMap = {
+                        "<": "&lt;",
+                        ">": "&gt;",
+                        '"': "&quot;",
+                        "&": "&amp;",
+                    };
+                    html += `<span>${values
+                        .map((value) => {
+                            let val = String.fromCharCode(parseInt(value, 16));
+                            return escapeMap[val] || val;
+                        })
+                        .join("")}</span>`;
                 } else if (typeName === "bool") {
-                    for (let i = 0; i < values.length; i += 4) {
-                        const value = values.slice(i, i + 4).join(",");
-                        //html += `<span>${value[1]Boolean(value[1])}</span>`;
+                    for (let i = 0; i < values.length; i += byteSize) {
+                        const value = values.slice(i, i + byteSize).join(",");
                         html += `<span class="payload-value u64-value">${Boolean(Number(value[1]))}</span>`;
                     }
+                } else {
+                    for (let i = 0; i < values.length; i += byteSize) {
+                        const value = values.slice(i, i + byteSize).join(",");
+                        const hexClass =
+                            tooltipClassMapping[byteSize] || "default-value";
+                        html += `<span data-tooltip="${hexToDec(value)}" class="payload-value ${hexClass}">${value}</span>`;
+                    }
                 }
-
                 return html;
             }
 
