@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta name="color-scheme" content="light dark" />
+        <title>DM nv dump viewer</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                /*margin: 0 auto;*/
+                padding: 0px;
+                margin: 0px;
+                line-height: 1.6;
+                background-color: #000;
+                color: #fff;
+            }
+            #fileInput,
+            #searchInput {
+                width: 100%;
+                padding: 10px;
+                box-sizing: border-box;
+                border: none;
+            }
+            #searchInput {
+                background-color: #222;
+            }
+            .table-container {
+                max-height: calc(100vh - 45px);
+                overflow-y: auto;
+                position: relative;
+                border: 1px solid #222;
+            }
+            table {
+                width: 100%;
+                border-collapse: collapse;
+                table-layout: fixed;
+            }
+            thead {
+                position: sticky;
+                top: -1px;
+                z-index: 1;
+                padding-top: 22px;
+                background: #222;
+            }
+            th,
+            td {
+                border: 1px solid #222;
+                padding: 3px 5px;
+                text-align: left;
+                overflow: scroll;
+            }
+            th {
+                font-weight: bold;
+            }
+            .payload-value {
+                display: inline-block;
+                padding: 2px 6px 0 6px;
+                margin: 2px;
+                border-radius: 3px;
+                font-family: monospace;
+                font-weight: bold;
+            }
+            .payload-value:hover {
+                background-color: #555;
+            }
+            .u8-value {
+                background-color: #4a371d;
+            }
+            .u16-value {
+                background-color: #30363d;
+            }
+            .u32-value {
+                background-color: #2e2a25;
+            }
+            .u64-value {
+                background-color: #2d252e;
+            }
+            #message {
+                text-align: center;
+                color: #666;
+                margin-top: 20px;
+            }
+            #loading {
+                background: #333;
+                padding: 20px;
+                display: none;
+            }
+            .stats {
+                margin: 10px 10px;
+                font-size: 0.9em;
+                color: #666;
+            }
+            .flex-container {
+                display: flex;
+                flex-wrap: nowrap;
+            }
+
+            .flex-container > div {
+                width: 100%;
+            }
+            [data-tooltip]:hover::after {
+                display: block;
+                position: absolute;
+                content: attr(data-tooltip);
+                background: white;
+                color: black;
+                padding: 5px 10px 3px 10px;
+                border-radius: 3px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="flex-container">
+            <input
+                type="text"
+                id="searchInput"
+                placeholder="Search (min 2 characters)..."
+                disabled
+            />
+            <div class="stats">
+                <span id="displayedEntries">0</span> /
+                <span id="totalEntries">0</span>
+            </div>
+            <input type="file" id="fileInput" accept=".json" />
+        </div>
+
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 45px">Index</th>
+                        <th style="width: 40%">Registry Name</th>
+                        <th style="width: 56%">Payload</th>
+                    </tr>
+                </thead>
+                <tbody id="tableBody"></tbody>
+            </table>
+        </div>
+
+        <div id="loading">Processing data...</div>
+
+        <script>
+            const CHUNK_SIZE = 50; // Number of rows to render at once
+            const BUFFER_SIZE = 100; // Number of rows to keep in memory above/below viewport
+
+            let jsonData = [];
+            let filteredData = [];
+            let visibleData = [];
+            let lastScrollTop = 0;
+            let isProcessing = false;
+            let currentChunk = 0;
+
+            const tableBody = document.getElementById("tableBody");
+            const tableContainer = document.querySelector(".table-container");
+            const loading = document.getElementById("loading");
+            const totalEntriesSpan = document.getElementById("totalEntries");
+            const displayedEntriesSpan =
+                document.getElementById("displayedEntries");
+
+            function hexToDec(hex) {
+                let bytes = hex.split(",").reverse().join("");
+                let decimal = parseInt(bytes, 16);
+                return decimal;
+            }
+
+            function parsePayload(payload, typeName) {
+                const values = payload.split(",");
+                let html = "";
+
+                if (typeName === "u8" || typeName === "s8") {
+                    values.forEach((value) => {
+                        const hex = value.padStart(2, "0");
+                        html += `<span data-tooltip="${hexToDec(value)}" class="payload-value u8-value">${hex}</span>`;
+                    });
+                } else if (typeName === "u16" || typeName === "s16") {
+                    for (let i = 0; i < values.length; i += 2) {
+                        const value = values.slice(i, i + 2).join(",");
+                        html += `<span data-tooltip="${hexToDec(value)}" class="payload-value u16-value">${value}</span>`;
+                    }
+                } else if (
+                    typeName === "u32" ||
+                    typeName === "s32" ||
+                    typeName === "uint"
+                ) {
+                    for (let i = 0; i < values.length; i += 4) {
+                        const value = values.slice(i, i + 4).join(",");
+                        html += `<span data-tooltip="${hexToDec(value)}" class="payload-value u32-value">${value}</span>`;
+                    }
+                } else if (typeName === "u64" || typeName === "s64") {
+                    for (let i = 0; i < values.length; i += 8) {
+                        const value = values.slice(i, i + 8).join(",");
+                        html += `<span data-tooltip="${hexToDec(value)}" class="payload-value u64-value">${value}</span>`;
+                    }
+                } else if (typeName === "char") {
+                    for (let i = 0; i < values.length; i += 1) {
+                        const value = values.slice(i, i + 1).join(",");
+                        html += `<span>${String.fromCharCode(parseInt(value, 16))}</span>`;
+                    }
+                } else if (typeName === "bool") {
+                    for (let i = 0; i < values.length; i += 4) {
+                        const value = values.slice(i, i + 4).join(",");
+                        //html += `<span>${value[1]Boolean(value[1])}</span>`;
+                        html += `<span class="payload-value u64-value">${Boolean(Number(value[1]))}</span>`;
+                    }
+                }
+
+                return html;
+            }
+
+            function updateStats() {
+                totalEntriesSpan.textContent = jsonData.length;
+                displayedEntriesSpan.textContent = visibleData.length;
+            }
+
+            function renderChunk(startIndex, endIndex) {
+                const fragment = document.createDocumentFragment();
+
+                for (
+                    let i = startIndex;
+                    i < endIndex && i < visibleData.length;
+                    i++
+                ) {
+                    const item = visibleData[i];
+                    const row = document.createElement("tr");
+
+                    const indexCell = document.createElement("td");
+                    indexCell.textContent = item.Index;
+                    row.appendChild(indexCell);
+
+                    const nameCell = document.createElement("td");
+                    nameCell.textContent = item.RegistryName;
+                    row.appendChild(nameCell);
+
+                    const payloadCell = document.createElement("td");
+                    payloadCell.innerHTML = parsePayload(
+                        item.Payload,
+                        item.TypeName,
+                    );
+                    row.appendChild(payloadCell);
+
+                    fragment.appendChild(row);
+                }
+
+                tableBody.appendChild(fragment);
+                updateStats();
+            }
+
+            function processJsonChunk(reader, accumulator = "") {
+                loading.style.display = "block";
+
+                reader.read().then(({ done, value }) => {
+                    if (done) {
+                        try {
+                            const jsonString = accumulator.trim();
+                            jsonData = JSON.parse(
+                                jsonString.startsWith("{")
+                                    ? `[${jsonString}]`
+                                    : jsonString,
+                            );
+                            visibleData = jsonData;
+                            document.getElementById("searchInput").disabled =
+                                false;
+                            renderChunk(0, CHUNK_SIZE);
+                            loading.style.display = "none";
+                        } catch (error) {
+                            alert("Invalid JSON format");
+                            loading.style.display = "none";
+                        }
+                        return;
+                    }
+
+                    accumulator += new TextDecoder().decode(value);
+                    requestAnimationFrame(() =>
+                        processJsonChunk(reader, accumulator),
+                    );
+                });
+            }
+
+            function handleScroll() {
+                if (isProcessing) return;
+
+                const scrollTop = tableContainer.scrollTop;
+                const containerHeight = tableContainer.clientHeight;
+                const totalHeight = tableContainer.scrollHeight;
+
+                // Calculate if we're near bottom
+                if (scrollTop + containerHeight > totalHeight - 200) {
+                    isProcessing = true;
+                    const nextChunk = currentChunk + 1;
+                    const startIndex = nextChunk * CHUNK_SIZE;
+                    const endIndex = startIndex + CHUNK_SIZE;
+
+                    if (startIndex < visibleData.length) {
+                        renderChunk(startIndex, endIndex);
+                        currentChunk = nextChunk;
+                    }
+                    isProcessing = false;
+                }
+            }
+
+            document
+                .getElementById("fileInput")
+                .addEventListener("change", function (e) {
+                    const file = e.target.files[0];
+                    if (file) {
+                        tableBody.innerHTML = "";
+                        currentChunk = 0;
+                        const reader = file.stream().getReader();
+                        processJsonChunk(reader);
+                    }
+                });
+
+            let searchTimeout;
+            document
+                .getElementById("searchInput")
+                .addEventListener("input", function (e) {
+                    clearTimeout(searchTimeout);
+                    const searchTerm = e.target.value.toLowerCase();
+
+                    searchTimeout = setTimeout(() => {
+                        if (searchTerm.length >= 2) {
+                            visibleData = jsonData.filter(
+                                (item) =>
+                                    item.Index.toString().includes(
+                                        searchTerm,
+                                    ) ||
+                                    item.RegistryName.toLowerCase().includes(
+                                        searchTerm,
+                                    ) ||
+                                    item.Payload.toLowerCase().includes(
+                                        searchTerm,
+                                    ),
+                            );
+                        } else {
+                            visibleData = jsonData;
+                        }
+
+                        tableBody.innerHTML = "";
+                        currentChunk = 0;
+                        renderChunk(0, CHUNK_SIZE);
+                    }, 0);
+                });
+
+            tableContainer.addEventListener("scroll", handleScroll);
+        </script>
+    </body>
+</html>
